@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sermon Explainer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <div class="page">
+    <header class="page-header">
+      <h1>Sermon Explainer</h1>
+      <p class="subtitle">Turn a sermon into a short, illustrated explainer video.</p>
+    </header>
+
+    <!-- ============================================================ -->
+    <!-- SCREEN 1: THE FORM (what the person fills in before starting) -->
+    <!-- ============================================================ -->
+    <section id="form-screen" class="screen">
+      <form id="job-form">
+
+        <div class="field-group">
+          <label for="source">Sermon source</label>
+          <p class="hint">Paste a YouTube link, upload an mp3/video file from your device, or enter a server-side media path such as input/my_sermon.mp3.</p>
+          <input type="text" id="source" name="source" placeholder="https://www.youtube.com/watch?v=... or input/my_sermon.mp3" />
+          <p class="hint">Or upload from this device:</p>
+          <input type="file" id="source-file" accept="audio/*,video/*" />
+          <p class="hint">Output length rule: source audio over 1 hour targets about 10 minutes; 1 hour or less targets about 5-6 minutes.</p>
+        </div>
+
+        <!-- This box only appears when the source looks like a YouTube/web link -->
+        <div class="field-group" id="rights-group" hidden>
+          <label class="checkbox-label">
+            <input type="checkbox" id="confirm-rights" name="confirm_rights" />
+            I have the rights or permission to use this recording.
+          </label>
+        </div>
+
+        <div class="field-group">
+          <label for="title">Title <span class="optional">(optional)</span></label>
+          <p class="hint">Shown on the intro card. If left blank, a title will be generated automatically.</p>
+          <input type="text" id="title" name="title" placeholder="e.g. Walking in Faith" />
+        </div>
+
+        <div class="field-group">
+          <label for="intro-seconds">Intro card length: <span id="intro-seconds-value">5</span> seconds</label>
+          <input type="range" id="intro-seconds" name="intro_seconds" min="1" max="10" value="5" />
+        </div>
+
+        <div class="field-group">
+          <label for="outro-text">Outro message</label>
+          <p class="hint">Shown on the closing card, e.g. a thank-you or a call to action.</p>
+          <textarea id="outro-text" name="outro_text" rows="2" placeholder="Thanks for watching! Follow us for more."></textarea>
+        </div>
+
+        <div class="field-group">
+          <label for="outro-seconds">Outro card length: <span id="outro-seconds-value">5</span> seconds</label>
+          <input type="range" id="outro-seconds" name="outro_seconds" min="1" max="10" value="5" />
+        </div>
+
+        <fieldset class="field-group">
+          <legend>Social links <span class="optional">(optional - leave any blank to skip)</span></legend>
+          <input type="text" id="social-facebook" placeholder="Facebook URL" />
+          <input type="text" id="social-youtube" placeholder="YouTube URL" />
+          <input type="text" id="social-x" placeholder="X (Twitter) URL" />
+          <input type="text" id="social-instagram" placeholder="Instagram URL" />
+          <input type="text" id="social-tiktok" placeholder="TikTok URL" />
+        </fieldset>
+
+        <fieldset class="field-group">
+          <legend>Options</legend>
+          <label class="checkbox-label">
+            <input type="checkbox" id="enable-music" checked />
+            Add quiet background music
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="burn-captions" checked />
+            Burn captions onto the video
+          </label>
+        </fieldset>
+
+        <p class="cost-warning">
+          Heads up: generating a video uses paid API credits (transcription, AI
+          summarization, narration, and illustration). Each run has a real cost.
+        </p>
+
+        <button type="submit" id="submit-button">Generate explainer video</button>
+      </form>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- SCREEN 2: PROGRESS (shown while the backend is working) -->
+    <!-- ============================================================ -->
+    <section id="progress-screen" class="screen" hidden>
+      <h2>Generating your video...</h2>
+      <p id="progress-message" class="progress-message">Starting up...</p>
+
+      <div class="progress-bar-track">
+        <div id="progress-bar-fill" class="progress-bar-fill" style="width: 0%"></div>
+      </div>
+      <p id="progress-percent-label">0%</p>
+
+      <ol class="stage-list">
+        <li data-stage="fetch_source">Fetch source</li>
+        <li data-stage="transcribe">Transcribe</li>
+        <li data-stage="summarize">Summarize</li>
+        <li data-stage="narrate">Narrate</li>
+        <li data-stage="illustrate">Illustrate</li>
+        <li data-stage="assemble_base">Assemble base video</li>
+        <li data-stage="music">Generate background music</li>
+        <li data-stage="finalize">Enhance and finalize</li>
+      </ol>
+
+      <p class="hint">This can take several minutes for longer sermons - feel free to leave this tab open in the background.</p>
+      <button id="cancel-button" class="secondary-button">Start over</button>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- SCREEN 3: RESULTS (shown when the video is ready) -->
+    <!-- ============================================================ -->
+    <section id="results-screen" class="screen" hidden>
+      <h2>Your video is ready</h2>
+
+      <video id="result-preview" controls></video>
+
+      <div class="result-meta">
+        <p id="result-source-used"></p>
+        <p id="result-duration"></p>
+        <p id="result-music-note"></p>
+      </div>
+
+      <div class="button-row">
+        <a id="download-video-button" class="primary-button" download>Download final video</a>
+        <a id="download-subtitles-button" class="secondary-button" download>Download subtitles</a>
+      </div>
+
+      <p class="hint download-reminder">
+        Download this soon - depending on your backend's hosting plan, generated
+        files may not be kept indefinitely.
+      </p>
+
+      <button id="start-new-button" class="secondary-button">Start a new video</button>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- ERROR BANNER (can appear on top of any screen) -->
+    <!-- ============================================================ -->
+    <div id="error-banner" class="error-banner" hidden>
+      <p id="error-message"></p>
+      <div class="button-row">
+        <button id="retry-button" class="primary-button" hidden>Retry</button>
+        <button id="dismiss-error-button" class="secondary-button">Dismiss</button>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

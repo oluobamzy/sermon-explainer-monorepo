@@ -1,0 +1,23 @@
+# Loads your .env file into the program
+python-dotenv==1.0.1
+
+# Official SDKs for the two "thinking" services
+openai==1.54.0
+anthropic==0.39.0
+elevenlabs>=1.0.0
+
+# For downloading YouTube audio/video
+yt-dlp>=2024.10.22
+
+# For measuring media length and talking to ffmpeg conveniently
+ffmpeg-python==0.2.0
+
+# For making plain HTTP requests to ElevenLabs and Recraft
+# (they don't have official Python SDKs we're using here, so we call
+# their web APIs directly - this is a normal, standard approach)
+requests==2.32.3
+
+# API server layer for frontend integration
+fastapi==0.115.5
+uvicorn==0.32.1
+python-multipart==0.0.12

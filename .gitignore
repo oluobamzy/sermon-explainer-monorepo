@@ -1,0 +1,8 @@
+sermon-explainer/venv/
+sermon-explainer/__pycache__/
+sermon-explainer/**/__pycache__/
+sermon-explainer/.env
+sermon-explainer/input/
+sermon-explainer/output/
+sermon-explainer-web/node_modules/
+.DS_Store
