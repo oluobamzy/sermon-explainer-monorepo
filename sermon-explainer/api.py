@@ -92,9 +92,16 @@ class UploadSourceResponse(BaseModel):
 
 
 app = FastAPI(title="Sermon Explainer API", version="1.0.0")
+
+# TEMPORARY: wildcard allows all origins during initial deployment testing.
+# Once the Vercel frontend URL is known (Step 4), replace "*" with the real
+# URL, e.g. ["https://sermon-explainer-web-xxxx.vercel.app"]
+# Do NOT leave this as "*" in production long-term.
+ALLOWED_ORIGINS = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
