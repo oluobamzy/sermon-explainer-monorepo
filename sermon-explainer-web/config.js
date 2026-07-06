@@ -14,4 +14,4 @@
 // Replace the value below with that exact URL (no trailing slash).
 // ============================================================
 
-const API_BASE_URL = "http://localhost:8000";
+const API_BASE_URL = "https://sermon-explainer.onrender.com";
