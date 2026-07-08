@@ -24,6 +24,16 @@ import os
 import subprocess
 import ffmpeg
 
+TARGET_WIDTH = 1920
+TARGET_HEIGHT = 1080
+TARGET_FPS = 30
+TARGET_VIDEO_CODEC = "h264"
+TARGET_PIXEL_FORMAT = "yuv420p"
+TARGET_AUDIO_CODEC = "aac"
+TARGET_AUDIO_SAMPLE_RATE = "48000"
+TARGET_AUDIO_CHANNELS = 2
+CONCAT_DURATION_TOLERANCE_SECONDS = 0.1
+
 
 SOCIAL_PLATFORM_ORDER = [
     ("facebook", "Facebook"),
@@ -37,6 +47,192 @@ SOCIAL_PLATFORM_ORDER = [
 def _probe_duration_seconds(media_path: str) -> float:
     probe = ffmpeg.probe(media_path)
     return float(probe["format"]["duration"])
+
+
+def _safe_probe_duration_seconds(media_path: str) -> float:
+    try:
+        return _probe_duration_seconds(media_path)
+    except Exception:
+        return 0.0
+
+
+def _rate_string_to_float(rate: str) -> float:
+    if not rate or rate == "0/0":
+        return 0.0
+    if "/" in rate:
+        num, den = rate.split("/", 1)
+        den_val = float(den)
+        if den_val == 0:
+            return 0.0
+        return float(num) / den_val
+    return float(rate)
+
+
+def _clip_specs(media_path: str) -> dict:
+    probe = ffmpeg.probe(media_path)
+    video_stream = next((s for s in probe.get("streams", []) if s.get("codec_type") == "video"), None)
+    audio_stream = next((s for s in probe.get("streams", []) if s.get("codec_type") == "audio"), None)
+
+    if not video_stream:
+        raise RuntimeError(f"No video stream found: {media_path}")
+    if not audio_stream:
+        raise RuntimeError(f"No audio stream found: {media_path}")
+
+    r_frame_rate = video_stream.get("r_frame_rate", "0/0")
+    avg_frame_rate = video_stream.get("avg_frame_rate", "0/0")
+
+    return {
+        "video_codec": video_stream.get("codec_name"),
+        "width": int(video_stream.get("width", 0)),
+        "height": int(video_stream.get("height", 0)),
+        "pixel_format": video_stream.get("pix_fmt"),
+        "r_frame_rate": r_frame_rate,
+        "avg_frame_rate": avg_frame_rate,
+        "r_frame_rate_float": _rate_string_to_float(r_frame_rate),
+        "avg_frame_rate_float": _rate_string_to_float(avg_frame_rate),
+        "audio_codec": audio_stream.get("codec_name"),
+        "audio_sample_rate": str(audio_stream.get("sample_rate", "")),
+        "audio_channels": int(audio_stream.get("channels", 0)),
+        "audio_channel_layout": audio_stream.get("channel_layout", "unknown"),
+    }
+
+
+def _escape_concat_path(path: str) -> str:
+    # ffmpeg concat demuxer expects single-quoted absolute paths; escape single quotes safely.
+    return path.replace("'", "'\\''")
+
+
+def _write_concat_list_file(video_paths: list, list_file: str) -> None:
+    with open(list_file, "w", encoding="utf-8") as f:
+        for path in video_paths:
+            abs_path = os.path.abspath(path)
+            f.write(f"file '{_escape_concat_path(abs_path)}'\n")
+
+
+def _verify_concat_compatibility(video_paths: list, expected_fps: int = TARGET_FPS) -> list:
+    mismatches = []
+    expected = {
+        "video_codec": TARGET_VIDEO_CODEC,
+        "width": TARGET_WIDTH,
+        "height": TARGET_HEIGHT,
+        "pixel_format": TARGET_PIXEL_FORMAT,
+        "audio_codec": TARGET_AUDIO_CODEC,
+        "audio_sample_rate": TARGET_AUDIO_SAMPLE_RATE,
+        "audio_channels": TARGET_AUDIO_CHANNELS,
+    }
+
+    baseline_specs = None
+    baseline_path = None
+
+    for path in video_paths:
+        abs_path = os.path.abspath(path)
+        specs = _clip_specs(abs_path)
+        clip_name = os.path.basename(abs_path)
+
+        for key, expected_val in expected.items():
+            actual_val = specs.get(key)
+            if actual_val != expected_val:
+                mismatches.append(
+                    f"{clip_name}: {key} is {actual_val}, expected {expected_val}"
+                )
+
+        if specs["r_frame_rate_float"] <= 0 or specs["avg_frame_rate_float"] <= 0:
+            mismatches.append(
+                f"{clip_name}: invalid frame rate values r_frame_rate={specs['r_frame_rate']}, "
+                f"avg_frame_rate={specs['avg_frame_rate']}"
+            )
+        elif abs(specs["r_frame_rate_float"] - specs["avg_frame_rate_float"]) > 0.01:
+            mismatches.append(
+                f"{clip_name}: appears variable-frame-rate (r={specs['r_frame_rate']}, "
+                f"avg={specs['avg_frame_rate']})"
+            )
+
+        if abs(specs["avg_frame_rate_float"] - float(expected_fps)) > 0.01:
+            mismatches.append(
+                f"{clip_name}: avg frame rate is {specs['avg_frame_rate_float']:.3f}, "
+                f"expected {expected_fps}.000"
+            )
+
+        if baseline_specs is None:
+            baseline_specs = specs
+            baseline_path = abs_path
+            continue
+
+        cross_clip_keys = [
+            "video_codec",
+            "width",
+            "height",
+            "pixel_format",
+            "r_frame_rate",
+            "avg_frame_rate",
+            "audio_codec",
+            "audio_sample_rate",
+            "audio_channels",
+            "audio_channel_layout",
+        ]
+        for key in cross_clip_keys:
+            if specs.get(key) != baseline_specs.get(key):
+                mismatches.append(
+                    f"{clip_name}: {key} is {specs.get(key)}, expected {baseline_specs.get(key)} "
+                    f"(from {os.path.basename(baseline_path)})"
+                )
+
+    return mismatches
+
+
+def _concat_with_demuxer_stream_copy(video_paths: list, out_path: str, list_file: str) -> None:
+    _write_concat_list_file(video_paths, list_file)
+    command = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        list_file,
+        "-c",
+        "copy",
+        out_path,
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Concat demuxer stream copy failed.\nffmpeg said:\n{result.stderr}")
+
+
+def _concatenate_with_fallback(video_paths: list, out_path: str, work_dir: str, context_label: str) -> str:
+    list_file = os.path.join(work_dir, f"concat_list_{context_label}.txt")
+    expected_duration = sum(_safe_probe_duration_seconds(path) for path in video_paths)
+
+    try:
+        mismatches = _verify_concat_compatibility(video_paths)
+        if mismatches:
+            print(f"[concat:{context_label}] WARNING: stream-copy compatibility check failed:")
+            for item in mismatches:
+                print(f"[concat:{context_label}]  - {item}")
+            raise RuntimeError("Input clips are not stream-copy compatible.")
+
+        _concat_with_demuxer_stream_copy(video_paths, out_path, list_file)
+        actual_duration = _safe_probe_duration_seconds(out_path)
+        duration_delta = abs(actual_duration - expected_duration)
+        if duration_delta > CONCAT_DURATION_TOLERANCE_SECONDS:
+            print(
+                f"[concat:{context_label}] WARNING: duration mismatch after stream copy "
+                f"(actual={actual_duration:.3f}s, expected={expected_duration:.3f}s, "
+                f"delta={duration_delta:.3f}s)."
+            )
+            raise RuntimeError("Duration validation failed after stream-copy concat.")
+
+        print(
+            f"[concat:{context_label}] fast path used (concat demuxer + stream copy). "
+            f"duration={actual_duration:.3f}s"
+        )
+        return "fast"
+    except Exception as exc:
+        print(f"[concat:{context_label}] WARNING: falling back to re-encode concat. Reason: {exc}")
+        _concatenate_videos_with_reencode(video_paths, out_path)
+        print(f"[concat:{context_label}] fallback path used (filter_complex re-encode).")
+        return "fallback"
 
 
 def _ffmpeg_has_filter(filter_name: str) -> bool:
@@ -136,7 +332,7 @@ def _render_title_card(
         "-f",
         "lavfi",
         "-i",
-        f"color=c=#1f2a44:s=1920x1080:d={duration_seconds}",
+        f"color=c=#1f2a44:s={TARGET_WIDTH}x{TARGET_HEIGHT}:d={duration_seconds}",
         "-f",
         "lavfi",
         "-i",
@@ -151,9 +347,9 @@ def _render_title_card(
         "-ar",
         "48000",
         "-pix_fmt",
-        "yuv420p",
+        TARGET_PIXEL_FORMAT,
         "-r",
-        "30",
+        str(TARGET_FPS),
         output_path,
     ]
 
@@ -167,8 +363,25 @@ def _concatenate_videos_with_reencode(video_paths: list, out_path: str) -> None:
     for path in video_paths:
         command += ["-i", path]
 
-    filter_inputs = "".join(f"[{idx}:v][{idx}:a]" for idx in range(len(video_paths)))
-    filter_complex = f"{filter_inputs}concat=n={len(video_paths)}:v=1:a=1[vout][aout]"
+    filter_parts = []
+    normalized_inputs = []
+    for idx in range(len(video_paths)):
+        filter_parts.append(
+            f"[{idx}:v]fps={TARGET_FPS},"
+            f"scale={TARGET_WIDTH}:{TARGET_HEIGHT}:force_original_aspect_ratio=decrease,"
+            f"pad={TARGET_WIDTH}:{TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2,"
+            f"format={TARGET_PIXEL_FORMAT}[v{idx}]"
+        )
+        filter_parts.append(
+            f"[{idx}:a]aresample={TARGET_AUDIO_SAMPLE_RATE},"
+            f"aformat=channel_layouts=stereo[a{idx}]"
+        )
+        normalized_inputs.append(f"[v{idx}][a{idx}]")
+
+    filter_parts.append(
+        f"{''.join(normalized_inputs)}concat=n={len(video_paths)}:v=1:a=1[vout][aout]"
+    )
+    filter_complex = ";".join(filter_parts)
 
     command += [
         "-filter_complex",
@@ -182,9 +395,13 @@ def _concatenate_videos_with_reencode(video_paths: list, out_path: str) -> None:
         "-c:a",
         "aac",
         "-ar",
-        "48000",
+        TARGET_AUDIO_SAMPLE_RATE,
+        "-ac",
+        str(TARGET_AUDIO_CHANNELS),
+        "-r",
+        str(TARGET_FPS),
         "-pix_fmt",
-        "yuv420p",
+        TARGET_PIXEL_FORMAT,
         out_path,
     ]
 
@@ -249,8 +466,14 @@ def _enhance_video(
         "libx264",
         "-c:a",
         "aac",
+        "-r",
+        str(TARGET_FPS),
+        "-ar",
+        TARGET_AUDIO_SAMPLE_RATE,
+        "-ac",
+        str(TARGET_AUDIO_CHANNELS),
         "-pix_fmt",
-        "yuv420p",
+        TARGET_PIXEL_FORMAT,
         final_video_path,
     ]
 
@@ -297,9 +520,15 @@ def build_scene_clip(scene: dict, out_path: str) -> None:
             out_path,
             vcodec="libx264",
             acodec="aac",
-            pix_fmt="yuv420p",
-            vf="scale=1920:1080:force_original_aspect_ratio=decrease,"
-               "pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
+            pix_fmt=TARGET_PIXEL_FORMAT,
+            r=TARGET_FPS,
+            ar=TARGET_AUDIO_SAMPLE_RATE,
+            ac=TARGET_AUDIO_CHANNELS,
+            vf=(
+                f"fps={TARGET_FPS},"
+                f"scale={TARGET_WIDTH}:{TARGET_HEIGHT}:force_original_aspect_ratio=decrease,"
+                f"pad={TARGET_WIDTH}:{TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2"
+            ),
             shortest=None,
             loglevel="quiet",
         )
@@ -310,22 +539,7 @@ def build_scene_clip(scene: dict, out_path: str) -> None:
 
 def concatenate_clips(clip_paths: list, out_path: str, work_dir: str) -> None:
     """Joins all scene clips into one final video using ffmpeg's concat feature."""
-    list_file = os.path.join(work_dir, "concat_list.txt")
-    with open(list_file, "w") as f:
-        for path in clip_paths:
-            f.write(f"file '{os.path.abspath(path)}'\n")
-
-    command = [
-        "ffmpeg", "-y",
-        "-f", "concat", "-safe", "0",
-        "-i", list_file,
-        "-c", "copy",
-        out_path,
-    ]
-    result = subprocess.run(command, capture_output=True, text=True)
-
-    if result.returncode != 0:
-        raise RuntimeError(f"Final video assembly failed.\nffmpeg said:\n{result.stderr}")
+    _concatenate_with_fallback(clip_paths, out_path, work_dir, context_label="assemble_base")
 
 
 def assemble_video(
@@ -421,9 +635,11 @@ def assemble_video(
 
     final_video_path = os.path.join(output_dir, "explainer_final.mp4")
     print("Concatenating intro + body + outro...")
-    _concatenate_videos_with_reencode(
+    _concatenate_with_fallback(
         [intro_card_path, enhanced_body_path, outro_card_path],
         final_video_path,
+        work_dir,
+        context_label="finalize",
     )
     print(f"Enhanced final video: {final_video_path}")
 

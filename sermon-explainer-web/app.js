@@ -39,6 +39,7 @@ const errorBanner = document.getElementById("error-banner");
 const errorMessage = document.getElementById("error-message");
 const retryButton = document.getElementById("retry-button");
 const dismissErrorButton = document.getElementById("dismiss-error-button");
+const queuePositionNote = document.getElementById("queue-position-note");
 
 let lastFailedAction = null; // lets the Retry button re-run whatever just failed
 
@@ -331,7 +332,24 @@ async function checkJobStatus(jobId) {
 }
 
 function renderProgress(data) {
-  setProgressMessage(data.message || "Working...");
+  const queuePosition = Number.isInteger(data.queue_position) ? data.queue_position : null;
+  if (data.status === "queued") {
+    const queuedMessage = queuePosition
+      ? `Queued (position ${queuePosition}) - waiting for an open processing slot...`
+      : (data.message || "Queued - waiting for an open processing slot...");
+    setProgressMessage(queuedMessage);
+    if (queuePosition) {
+      queuePositionNote.hidden = false;
+      queuePositionNote.textContent = `Estimated wait: ${Math.max(0, queuePosition - 1)} job(s) ahead of you.`;
+    } else {
+      queuePositionNote.hidden = true;
+      queuePositionNote.textContent = "";
+    }
+  } else {
+    setProgressMessage(data.message || "Working...");
+    queuePositionNote.hidden = true;
+    queuePositionNote.textContent = "";
+  }
 
   const percent = typeof data.progress_percent === "number" ? data.progress_percent : 0;
   document.getElementById("progress-bar-fill").style.width = `${percent}%`;
@@ -347,7 +365,15 @@ function renderProgress(data) {
     "music",
     "finalize",
   ];
-  const currentIndex = stageOrder.indexOf(data.stage);
+  const normalizedStage = data.stage === "starting" ? "fetch_source" : data.stage;
+  const currentIndex = stageOrder.indexOf(normalizedStage);
+
+  if (data.status === "queued") {
+    document.querySelectorAll(".stage-list li").forEach((li) => {
+      li.classList.remove("active", "done");
+    });
+    return;
+  }
 
   if (data.stage === "completed") {
     document.querySelectorAll(".stage-list li").forEach((li) => {
@@ -361,7 +387,7 @@ function renderProgress(data) {
     const stageIndex = stageOrder.indexOf(li.dataset.stage);
     li.classList.remove("active", "done");
     if (stageIndex < currentIndex) li.classList.add("done");
-    if (stageIndex === currentIndex) li.classList.add("active");
+    if (stageIndex === currentIndex || (currentIndex < 0 && stageIndex === 0)) li.classList.add("active");
   });
 }
 
