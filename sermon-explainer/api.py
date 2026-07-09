@@ -180,10 +180,15 @@ def create_job(request: CreateJobRequest) -> str:
     return job_id
 
 
-def _get_job_snapshot(job_id: str) -> Optional[dict]:
+def _get_job_record_from_store(job_id: str) -> Optional[dict]:
     with JOBS_LOCK:
         record = JOBS.get(job_id)
         return deepcopy(record) if record else None
+
+
+def _get_job_snapshot(job_id: str) -> Optional[dict]:
+    # Legacy compatibility helper. Read access is centralized in get_job_status.
+    return get_job_status(job_id)
 
 
 def _get_queue_position(job_id: str) -> Optional[int]:
@@ -195,7 +200,7 @@ def _get_queue_position(job_id: str) -> Optional[int]:
 
 
 def get_job_status(job_id: str) -> Optional[dict]:
-    job = _get_job_snapshot(job_id)
+    job = _get_job_record_from_store(job_id)
     if not job:
         return None
 
@@ -342,6 +347,14 @@ def _check_job_cancelled(job_id: str) -> None:
 def _parse_error(exc: Exception) -> ErrorPayload:
     message = str(exc)
 
+    if hasattr(exc, "error_code"):
+        return ErrorPayload(
+            error_code=str(getattr(exc, "error_code")),
+            message=message,
+            retryable=bool(getattr(exc, "retryable", True)),
+            details=getattr(exc, "details", None),
+        )
+
     if isinstance(exc, PermissionError):
         return ErrorPayload(
             error_code="PERMISSION_NOT_CONFIRMED",
@@ -386,6 +399,7 @@ def _run_pipeline(job_id: str, request: CreateJobRequest) -> Dict[str, object]:
     source_info = fetch_source(
         request.source,
         permission_confirmed=request.confirm_rights if request.source.startswith(("http://", "https://")) else None,
+        job_id=job_id,
     )
 
     _check_job_cancelled(job_id)
@@ -635,7 +649,7 @@ def get_job(job_id: str) -> JobStatusResponse:
 
 @app.get("/jobs/{job_id}/result", response_model=JobResultResponse)
 def get_job_result(job_id: str) -> JobResultResponse:
-    job = _get_job_snapshot(job_id)
+    job = get_job_status(job_id)
 
     if not job:
         raise HTTPException(
@@ -687,7 +701,7 @@ def download_artifact(job_id: str, artifact: str):
             },
         )
 
-    job = _get_job_snapshot(job_id)
+    job = get_job_status(job_id)
 
     if not job:
         raise HTTPException(
